@@ -71,7 +71,7 @@ struct DiffuseBaker
     uint64 NumSamples = 0;
     Float3 ResultSum;
 
-    void Init(uint64 numSamples)
+    void Init(uint64 numSamples, Float4 prevResult[BasisCount])
     {
         NumSamples = numSamples;
         ResultSum = 0.0f;
@@ -82,7 +82,7 @@ struct DiffuseBaker
         return SampleCosineHemisphere(samplePoint.x, samplePoint.y);
     }
 
-    void AddSample(Float3 sampleDir, uint64 sampleIdx, Float3 sample, bool hitSky)
+    void AddSample(Float3 sampleDir, uint64 sampleIdx, Float3 sample)
     {
         ResultSum += sample;
     }
@@ -111,7 +111,7 @@ struct HL2Baker
     uint64 NumSamples = 0;
     Float3 ResultSum[3];
 
-    void Init(uint64 numSamples)
+    void Init(uint64 numSamples, Float4 prevResult[BasisCount])
     {
         NumSamples = numSamples;
         ResultSum[0] = ResultSum[1] = ResultSum[2] = 0.0f;
@@ -122,7 +122,7 @@ struct HL2Baker
         return SampleDirectionHemisphere(samplePoint.x, samplePoint.y);
     }
 
-    void AddSample(Float3 sampleDir, uint64 sampleIdx, Float3 sample, bool hitSky)
+    void AddSample(Float3 sampleDir, uint64 sampleIdx, Float3 sample)
     {
         static const Float3 BasisDirs[BasisCount] =
         {
@@ -164,7 +164,7 @@ struct SH4Baker
     uint64 NumSamples = 0;
     SH4Color ResultSum;
 
-    void Init(uint64 numSamples)
+    void Init(uint64 numSamples, Float4 prevResult[BasisCount])
     {
         NumSamples = numSamples;
         ResultSum = SH4Color();
@@ -175,7 +175,7 @@ struct SH4Baker
         return SampleDirectionHemisphere(samplePoint.x, samplePoint.y);
     }
 
-    void AddSample(Float3 sampleDir, uint64 sampleIdx, Float3 sample, bool hitSky)
+    void AddSample(Float3 sampleDir, uint64 sampleIdx, Float3 sample)
     {
         ResultSum += ProjectOntoSH4Color(sampleDir, sample);
     }
@@ -208,7 +208,7 @@ struct SH9Baker
     uint64 NumSamples = 0;
     SH9Color ResultSum;
 
-    void Init(uint64 numSamples)
+    void Init(uint64 numSamples, Float4 prevResult[BasisCount])
     {
         NumSamples = numSamples;
         ResultSum = SH9Color();
@@ -219,7 +219,7 @@ struct SH9Baker
         return SampleDirectionHemisphere(samplePoint.x, samplePoint.y);
     }
 
-    void AddSample(Float3 sampleDir, uint64 sampleIdx, Float3 sample, bool hitSky)
+    void AddSample(Float3 sampleDir, uint64 sampleIdx, Float3 sample)
     {
         ResultSum += ProjectOntoSH9Color(sampleDir, sample);
     }
@@ -252,7 +252,7 @@ struct H4Baker
     uint64 NumSamples = 0;
     SH9Color ResultSum;
 
-    void Init(uint64 numSamples)
+    void Init(uint64 numSamples, Float4 prevResult[BasisCount])
     {
         NumSamples = numSamples;
         ResultSum = SH9Color();
@@ -263,7 +263,7 @@ struct H4Baker
         return SampleDirectionHemisphere(samplePoint.x, samplePoint.y);
     }
 
-    void AddSample(Float3 sampleDir, uint64 sampleIdx, Float3 sample, bool hitSky)
+    void AddSample(Float3 sampleDir, uint64 sampleIdx, Float3 sample)
     {
         ResultSum += ProjectOntoSH9Color(sampleDir, sample);
     }
@@ -302,7 +302,7 @@ struct H6Baker
     uint64 NumSamples = 0;
     SH9Color ResultSum;
 
-    void Init(uint64 numSamples)
+    void Init(uint64 numSamples, Float4 prevResult[BasisCount])
     {
         NumSamples = numSamples;
         ResultSum = SH9Color();
@@ -313,7 +313,7 @@ struct H6Baker
         return SampleDirectionHemisphere(samplePoint.x, samplePoint.y);
     }
 
-    void AddSample(Float3 sampleDir, uint64 sampleIdx, Float3 sample, bool hitSky)
+    void AddSample(Float3 sampleDir, uint64 sampleIdx, Float3 sample)
     {
         ResultSum += ProjectOntoSH9Color(sampleDir, sample);
     }
@@ -355,8 +355,9 @@ template<uint64 SGCount> struct SGBaker
     FixedArray<Float3> SampleDirs;
     FixedArray<Float3> Samples;
     SG ProjectedResult[SGCount];
+    float RunningAverageWeights[SGCount] = { };
 
-    void Init(uint64 numSamples)
+    void Init(uint64 numSamples, Float4 prevResult[BasisCount])
     {
         CurrSampleIdx = 0;
         NumSamples = numSamples;
@@ -369,6 +370,15 @@ template<uint64 SGCount> struct SGBaker
         const SG* initialGuess = InitialGuess();
         for(uint64 i = 0; i < SGCount; ++i)
             ProjectedResult[i] = initialGuess[i];
+
+        if(AppSettings::SolveMode == SolveModes::RunningAverage || AppSettings::SolveMode == SolveModes::RunningAverageNN)
+        {
+            for(uint64 i = 0; i < SGCount; ++i)
+            {
+                ProjectedResult[i].Amplitude = prevResult[i].To3D();
+                RunningAverageWeights[i] = prevResult[i].w;
+            }
+        }
     }
 
     Float3 SampleDirection(Float2 samplePoint)
@@ -376,13 +386,18 @@ template<uint64 SGCount> struct SGBaker
         return SampleDirectionHemisphere(samplePoint.x, samplePoint.y);
     }
 
-    void AddSample(Float3 sampleDir, uint64 sampleIdx, Float3 sample, bool hitSky)
+    void AddSample(Float3 sampleDir, uint64 sampleIdx, Float3 sample)
     {
         SampleDirs[CurrSampleIdx] = sampleDir;
         Samples[CurrSampleIdx] = sample;
         ++CurrSampleIdx;
 
-        ProjectOntoSGs(sampleDir, sample, ProjectedResult, SGCount);
+        if(AppSettings::SolveMode == SolveModes::RunningAverage)
+            SGRunningAverage(sampleDir, sample, ProjectedResult, SGCount, (float)sampleIdx, RunningAverageWeights, false);
+        else if(AppSettings::SolveMode == SolveModes::RunningAverageNN)
+            SGRunningAverage(sampleDir, sample, ProjectedResult, SGCount, (float)sampleIdx, RunningAverageWeights, true);
+        else
+            ProjectOntoSGs(sampleDir, sample, ProjectedResult, SGCount);
     }
 
     void FinalResult(Float4 bakeOutput[BasisCount])
@@ -403,13 +418,21 @@ template<uint64 SGCount> struct SGBaker
 
     void ProgressiveResult(Float4 bakeOutput[BasisCount], uint64 passIdx)
     {
-        const float lerpFactor = passIdx / (passIdx + 1.0f);
-        for(uint64 i = 0; i < BasisCount; ++i)
+        if(AppSettings::SolveMode == SolveModes::RunningAverage || AppSettings::SolveMode == SolveModes::RunningAverageNN)
         {
-            Float3 newSample = ProjectedResult[i].Amplitude * HemisphereMonteCarloFactor(1);
-            Float3 currValue = bakeOutput[i].To3D();
-            currValue = Lerp<Float3>(newSample, currValue, lerpFactor);
-            bakeOutput[i] = Float4(Float3::Clamp(currValue, -FP16Max, FP16Max), 1.0f);
+            for(uint64 i = 0; i < SGCount; ++i)
+                bakeOutput[i] = Float4(Float3::Clamp(ProjectedResult[i].Amplitude, -FP16Max, FP16Max), RunningAverageWeights[i]);
+        }
+        else
+        {
+            const float lerpFactor = passIdx / (passIdx + 1.0f);
+            for(uint64 i = 0; i < SGCount; ++i)
+            {
+                Float3 newSample = ProjectedResult[i].Amplitude * HemisphereMonteCarloFactor(1);
+                Float3 currValue = bakeOutput[i].To3D();
+                currValue = Lerp<Float3>(newSample, currValue, lerpFactor);
+                bakeOutput[i] = Float4(Float3::Clamp(currValue, -FP16Max, FP16Max), 1.0f);
+            }
         }
     }
 };
@@ -435,10 +458,10 @@ struct BakeThreadContext
     SampleModes CurrSampleMode = SampleModes::Random;
     uint64 CurrNumSamples = 0;
     const std::vector<IntegrationSamples>* Samples;
-    FixedArray<Half4>* BakeOutput = nullptr;
+    FixedArray<Float4>* BakeOutput = nullptr;
     volatile int64* CurrBatch = nullptr;
 
-    void Init(FixedArray<Half4>* bakeOutput, const std::vector<IntegrationSamples>* samples,
+    void Init(FixedArray<Float4>* bakeOutput, const std::vector<IntegrationSamples>* samples,
               volatile int64* currBatch, const MeshBaker* meshBaker, uint64 newTag)
     {
         if(BakeTag == uint64(-1))
@@ -536,7 +559,15 @@ template<typename TBaker> static bool BakeDriver(BakeThreadContext& context, TBa
                 if(bakePoint.Coverage == 0 || bakePoint.Coverage == 0xFFFFFFFF)
                     continue;
 
-                baker.Init(numSamplesPerTexel);
+                Float4 texelResults[TBaker::BasisCount];
+                if(sampleIdx > 0)
+                {
+                    for(uint64 basisIdx = 0; basisIdx < TBaker::BasisCount; ++basisIdx)
+                        texelResults[basisIdx] = context.BakeOutput[basisIdx][texelIdx];
+                }
+
+                // The baker only accumulates one sample per pixel in progressive rendering.
+                baker.Init(1, texelResults);
 
                 IntegrationSampleSet sampleSet;
                 sampleSet.Init(integrationSamples, groupTexelIdx, sampleIdx);
@@ -549,31 +580,38 @@ template<typename TBaker> static bool BakeDriver(BakeThreadContext& context, TBa
                 // Create a random ray direction in tangent space, then convert to world space
                 Float3 rayStart = bakePoint.Position;
                 Float3 rayDirTS = baker.SampleDirection(sampleSet.Pixel());
-                Float3 rayDir = Float3::Transform(rayDirTS, tangentFrame);
-                rayDir = Float3::Normalize(rayDir);
+                Float3 rayDirWS = Float3::Transform(rayDirTS, tangentFrame);
+                rayDirWS = Float3::Normalize(rayDirWS);
 
-                params.RayDir = rayDir;
-                params.RayStart = rayStart + 0.1f * rayDir;
-                params.RayLen = FLT_MAX;
-                params.SampleSet = &sampleSet;
+                Float3 sampleResult = 0.0f;
 
-                float illuminance = 0.0f;
-                bool hitSky = false;
-                Float3 sampleResult = PathTrace(params, random, illuminance, hitSky);
-
-                if(addAreaLight)
+                Float2 directAreaLightSample = sampleSet.Lens();
+                if(addAreaLight && directAreaLightSample.x >= 0.5f)
                 {
                     Float3 areaLightIrradiance;
-                    sampleResult += SampleAreaLight(bakePoint.Position, bakePoint.Normal, context.SceneBVH->Scene,
-                                                    1.0f, 0.0f, false, 0.0f, 1.0f, sampleSet.Lens().x,
-                                                    sampleSet.Lens().y, areaLightIrradiance);
+                    sampleResult = SampleAreaLight(bakePoint.Position, bakePoint.Normal, context.SceneBVH->Scene,
+                                                   1.0f, 0.0f, false, 0.0f, 1.0f, sampleSet.Lens().x,
+                                                   sampleSet.Lens().y, areaLightIrradiance, rayDirWS);
+                    rayDirTS = Float3::Transform(rayDirWS, Float3x3::Transpose(tangentFrame));
+                }
+                else
+                {
+                    params.RayDir = rayDirWS;
+                    params.RayStart = rayStart + 0.1f * rayDirWS;
+                    params.RayLen = FLT_MAX;
+                    params.SampleSet = &sampleSet;
+
+                    float illuminance = 0.0f;
+                    bool hitSky = false;
+                    sampleResult = PathTrace(params, random, illuminance, hitSky);
                 }
 
-                baker.AddSample(rayDirTS, sampleIdx, sampleResult, hitSky);
+                // Account for equally distributing our samples among the area light and the rest of the environment
+                if(addAreaLight)
+                    sampleResult *= 2.0f;
 
-                Float4 texelResults[TBaker::BasisCount];
-                for(uint64 basisIdx = 0; basisIdx < TBaker::BasisCount; ++basisIdx)
-                    texelResults[basisIdx] = context.BakeOutput[basisIdx][texelIdx].ToFloat4();
+                baker.AddSample(rayDirTS, sampleIdx, sampleResult);
+
                 baker.ProgressiveResult(texelResults, sampleIdx);
 
                 for(uint64 basisIdx = 0; basisIdx < TBaker::BasisCount; ++basisIdx)
@@ -583,7 +621,8 @@ template<typename TBaker> static bool BakeDriver(BakeThreadContext& context, TBa
     }
     else
     {
-        baker.Init(numSamplesPerTexel);
+        Float4 texelResults[TBaker::BasisCount];
+        baker.Init(numSamplesPerTexel, texelResults);
 
         // Figure out the texel within the group that we're working on (we do 64 passes per group, each one a different texel)
         const uint64 groupTexelIdx =  batchIdx / numBakeGroups;
@@ -615,30 +654,39 @@ template<typename TBaker> static bool BakeDriver(BakeThreadContext& context, TBa
             // Create a random ray direction in tangent space, then convert to world space
             Float3 rayStart = bakePoint.Position;
             Float3 rayDirTS = baker.SampleDirection(sampleSet.Pixel());
-            Float3 rayDir = Float3::Transform(rayDirTS, tangentFrame);
-            rayDir = Float3::Normalize(rayDir);
+            Float3 rayDirWS = Float3::Transform(rayDirTS, tangentFrame);
+            rayDirWS = Float3::Normalize(rayDirWS);
 
-            params.RayDir = rayDir;
-            params.RayStart = rayStart + 0.1f * rayDir;
-            params.RayLen = FLT_MAX;
-            params.SampleSet = &sampleSet;
+            Float3 sampleResult;
 
-            float illuminance = 0.0f;
-            bool hitSky = false;
-            Float3 sampleResult = PathTrace(params, random, illuminance, hitSky);
-
-            if(addAreaLight)
+            Float2 directAreaLightSample = sampleSet.Lens();
+            if(addAreaLight && directAreaLightSample.x >= 0.5f)
             {
                 Float3 areaLightIrradiance;
                 sampleResult += SampleAreaLight(bakePoint.Position, bakePoint.Normal, context.SceneBVH->Scene,
                                                 1.0f, 0.0f, false, 0.0f, 1.0f, sampleSet.Lens().x,
-                                                sampleSet.Lens().y, areaLightIrradiance);
+                                                sampleSet.Lens().y, areaLightIrradiance, rayDirWS);
+                rayDirTS = Float3::Transform(rayDirWS, Float3x3::Transpose(tangentFrame));
+            }
+            else
+            {
+                params.RayDir = rayDirWS;
+                params.RayStart = rayStart + 0.1f * rayDirWS;
+                params.RayLen = FLT_MAX;
+                params.SampleSet = &sampleSet;
+
+                float illuminance = 0.0f;
+                bool hitSky = false;
+                sampleResult = PathTrace(params, random, illuminance, hitSky);
             }
 
-            baker.AddSample(rayDirTS, sampleIdx, sampleResult, hitSky);
+            // Account for equally distributing our samples among the area light and the rest of the environment
+            if(addAreaLight)
+                sampleResult *= 2.0f;
+
+            baker.AddSample(rayDirTS, sampleIdx, sampleResult);
         }
 
-        Float4 texelResults[TBaker::BasisCount];
         baker.FinalResult(texelResults);
         for(uint64 basisIdx = 0; basisIdx < TBaker::BasisCount; ++basisIdx)
             context.BakeOutput[basisIdx][texelIdx] = texelResults[basisIdx];
@@ -665,7 +713,7 @@ template<typename TBaker> static bool BakeDriver(BakeThreadContext& context, TBa
 // Data passed to the bake thread entry point
 struct BakeThreadData
 {
-    FixedArray<Half4>* BakeOutput = nullptr;
+    FixedArray<Float4>* BakeOutput = nullptr;
     const std::vector<IntegrationSamples>* Samples = nullptr;
     volatile int64* CurrBatch = nullptr;
     const MeshBaker* Baker = nullptr;
@@ -1647,12 +1695,14 @@ MeshBakerStatus MeshBaker::Update(const Camera& camera, uint32 screenWidth, uint
         ZeroMemory(&mapped, sizeof(mapped));
         if(SUCCEEDED(deviceContext->Map(stagingTexture, 0, D3D11_MAP_WRITE, 0, &mapped)))
         {
-            uint8* dst = reinterpret_cast<uint8*>(mapped.pData);
-            const Half4* src = bakeResults[bakeTextureUpdateIdx].Data();
+            Half4* dst = reinterpret_cast<Half4*>(mapped.pData);
+            const Float4* src = bakeResults[bakeTextureUpdateIdx].Data();
             for(uint64 y = 0; y < LightMapSize; ++y)
             {
-                memcpy(dst, src, sizeof(Half4) * LightMapSize);
-                dst += mapped.RowPitch;
+                for(uint64 x = 0; x < LightMapSize; ++x)
+                    dst[x] = Half4(src[x]);
+
+                dst += mapped.RowPitch / sizeof(Half4);
                 src += LightMapSize;
             }
 

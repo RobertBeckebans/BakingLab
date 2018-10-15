@@ -20,13 +20,14 @@
 #include "SG.h"
 #include <FileIO.h>
 #include "AppSettings.h"
+#include <Graphics/Sampling.h>
 
 
 static SG defaultInitialGuess[AppSettings::MaxSGCount];
 static bool eigenInitialized = false;
 
 // Generate uniform spherical gaussians on the sphere or hemisphere
-static void GenerateUniformSGs(SG* sgs, uint64 numSGs)
+static void GenerateUniformHemisphereSGs(SG* sgs, uint64 numSGs)
 {
     uint64 N = numSGs * 2;
 
@@ -62,6 +63,25 @@ static void GenerateUniformSGs(SG* sgs, uint64 numSGs)
 
     for(uint32 i = 0; i < numSGs; ++i)
         sgs[i].Sharpness = sharpness;
+
+	
+	const uint64 sampleCount = 2048;
+	Float2 samples[sampleCount];
+	GenerateHammersleySamples2D(samples, sampleCount);
+
+	for (uint32 i = 0; i < numSGs; ++i)
+		sgs[i].BasisSqIntegralOverDomain = 0.0f;
+
+	for (uint64 i = 0; i < sampleCount; ++i)
+	{
+		Float3 dir = SampleDirectionHemisphere(samples[i].x, samples[i].y);
+
+		for (uint32 j = 0; j < numSGs; ++j)
+		{
+			float weight = std::exp(sgs[j].Sharpness * (Float3::Dot(dir, sgs[j].Axis) - 1.0f));
+			sgs[j].BasisSqIntegralOverDomain += (weight * weight - sgs[j].BasisSqIntegralOverDomain) / float(i + 1);
+		}
+	}
 }
 
 void InitializeSGSolver(uint64 numSGs)
@@ -72,7 +92,7 @@ void InitializeSGSolver(uint64 numSGs)
         eigenInitialized = true;
     }
 
-    GenerateUniformSGs(defaultInitialGuess, numSGs);
+	GenerateUniformHemisphereSGs(defaultInitialGuess, numSGs);
 }
 
 const SG* InitialGuess()
@@ -209,6 +229,63 @@ static void SolveProjection(SGSolveParam& params)
         params.OutSGs[i].Amplitude *= monteCarloFactor;
 }
 
+// Accumulates a single sample for computing a set of SG's using a running average. This technique and the code it's based
+// on was provided by Thomas Roughton in the following article: http://torust.me/rendering/irradiance-caching/spherical-gaussians/2018/09/21/spherical-gaussians.html
+void SGRunningAverage(const Float3& dir, const Float3& color, SG* outSGs, uint64 numSGs, float sampleIdx, float* lobeWeights, bool nonNegative)
+{
+	float sampleWeightScale = 1.0f / (sampleIdx + 1);
+
+    float sampleLobeWeights[AppSettings::MaxSGCount] = { };
+    Float3 currentEstimate;
+
+    for(uint64 lobeIdx = 0; lobeIdx < numSGs; ++lobeIdx)
+    {
+        float dotProduct = Float3::Dot(outSGs[lobeIdx].Axis, dir);
+        float weight = exp(outSGs[lobeIdx].Sharpness * (dotProduct - 1.0f));
+		currentEstimate += outSGs[lobeIdx].Amplitude * weight;
+
+        sampleLobeWeights[lobeIdx] = weight;
+    }
+
+    for(uint64 lobeIdx = 0; lobeIdx < numSGs; ++lobeIdx)
+    {
+        float weight = sampleLobeWeights[lobeIdx];
+        if(weight == 0.0f)
+            continue;
+
+		float sphericalIntegralGuess = weight * weight;
+
+		lobeWeights[lobeIdx] += (sphericalIntegralGuess - lobeWeights[lobeIdx]) * sampleWeightScale;
+
+		// Clamp the spherical integral estimate to at least the true value to reduce variance.
+		float sphericalIntegral = std::max(lobeWeights[lobeIdx], outSGs[lobeIdx].BasisSqIntegralOverDomain);
+
+		Float3 otherLobesContribution = currentEstimate - outSGs[lobeIdx].Amplitude * weight;
+		Float3 newValue = (color - otherLobesContribution) * (weight / sphericalIntegral);
+
+        outSGs[lobeIdx].Amplitude += (newValue - outSGs[lobeIdx].Amplitude) * sampleWeightScale;
+
+        if(nonNegative)
+        {
+            outSGs[lobeIdx].Amplitude.x = Max(outSGs[lobeIdx].Amplitude.x, 0.0f);
+            outSGs[lobeIdx].Amplitude.y = Max(outSGs[lobeIdx].Amplitude.y, 0.0f);
+            outSGs[lobeIdx].Amplitude.z = Max(outSGs[lobeIdx].Amplitude.z, 0.0f);
+        } 
+    }
+}
+
+static void SolveRunningAverage(SGSolveParam& params, bool nonNegative)
+{
+    Assert_(params.XSamples != nullptr);
+    Assert_(params.YSamples != nullptr);
+
+    float lobeWeights[AppSettings::MaxSGCount] = { };
+
+    // Project color samples onto the SGs
+    for(uint32 i = 0; i < params.NumSamples; ++i)
+        SGRunningAverage(params.XSamples[i], params.YSamples[i], params.OutSGs, params.NumSGs, (float)i, lobeWeights, nonNegative);
+}
+
 // Solve the set of spherical gaussians based on input set of data
 void SolveSGs(SGSolveParam& params)
 {
@@ -220,6 +297,10 @@ void SolveSGs(SGSolveParam& params)
         SolveNNLS(params);
     else if(AppSettings::SolveMode == SolveModes::SVD)
         SolveSVD(params);
+    else if(AppSettings::SolveMode == SolveModes::RunningAverage)
+        SolveRunningAverage(params, false);
+    else if(AppSettings::SolveMode == SolveModes::RunningAverageNN)
+        SolveRunningAverage(params, true);
     else
         SolveProjection(params);
 }
