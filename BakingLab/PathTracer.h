@@ -194,6 +194,11 @@ Float3 SampleAreaLight(const Float3& position, const Float3& normal, RTCScene sc
                        bool includeSpecular, Float3 specAlbedo, float roughness,
                        float u1, float u2, Float3& irradiance, Float3& sampleDir);
 
+Float3 SampleSunLight(const Float3& position, const Float3& normal, RTCScene scene,
+                      const Float3& diffuseAlbedo, const Float3& cameraPos,
+                      bool includeSpecular, Float3 specAlbedo, float roughness,
+                      float u1, float u2, Float3& irradiance);
+
 // Options for path tracing
 struct PathTracerParams
 {
@@ -204,6 +209,7 @@ struct PathTracerParams
     uint8 EnableSpecular = false;
     uint8 EnableBounceSpecular = false;
     uint8 ViewIndirectSpecular = false;
+    uint8 ViewIndirectDiffuse = false;
     int32 MaxPathLength = -1;
     int32 RussianRouletteDepth = -1;
     float RussianRouletteProbability = 0.5f;

@@ -131,6 +131,27 @@ static const char* SGDiffuseModesLabels[3] =
     "Fitted (Hill 16)",
 };
 
+static const char* SGSpecularModesLabels[3] =
+{
+    "Punctual",
+    "SG Warp",
+    "ASG Warp",
+};
+
+static const char* SH4DiffuseModesLabels[2] =
+{
+    "Convolution",
+    "Geomerics",
+};
+
+static const char* SHSpecularModesLabels[4] =
+{
+    "Convolution",
+    "DominantDirection",
+    "Punctual",
+    "Prefiltered",
+};
+
 static const char* SampleModesLabels[5] =
 {
     "Random",
@@ -140,9 +161,11 @@ static const char* SampleModesLabels[5] =
     "CMJ",
 };
 
-static const char* BakeModesLabels[10] =
+static const char* BakeModesLabels[12] =
 {
     "Diffuse",
+    "Directional",
+    "DirectionalRGB",
     "Half-Life 2",
     "L1 SH",
     "L2 SH",
@@ -174,6 +197,7 @@ namespace AppSettings
 {
     BoolSetting EnableSun;
     BoolSetting SunAreaLightApproximation;
+    BoolSetting BakeDirectSunLight;
     ColorSetting SunTintColor;
     FloatSetting SunIntensityScale;
     FloatSetting SunSize;
@@ -232,7 +256,9 @@ namespace AppSettings
     JitterModesSetting JitterMode;
     FloatSetting JitterScale;
     SGDiffuseModesSetting SGDiffuseMode;
-    BoolSetting UseASGWarp;
+    SGSpecularModesSetting SGSpecularMode;
+    SH4DiffuseModesSetting SH4DiffuseMode;
+    SHSpecularModesSetting SHSpecularMode;
     IntSetting LightMapResolution;
     IntSetting NumBakeSamples;
     SampleModesSetting BakeSampleMode;
@@ -241,6 +267,7 @@ namespace AppSettings
     FloatSetting BakeRussianRouletteProbability;
     BakeModesSetting BakeMode;
     SolveModesSetting SolveMode;
+    BoolSetting WorldSpaceBake;
     ScenesSetting CurrentScene;
     BoolSetting EnableDiffuse;
     BoolSetting EnableSpecular;
@@ -253,6 +280,7 @@ namespace AppSettings
     FloatSetting NormalMapIntensity;
     FloatSetting DiffuseAlbedoScale;
     FloatSetting RoughnessScale;
+    FloatSetting MetallicOffset;
     BoolSetting ShowGroundTruth;
     IntSetting NumRenderSamples;
     SampleModesSetting RenderSampleMode;
@@ -265,7 +293,9 @@ namespace AppSettings
     FloatSetting BloomBlurSigma;
     BoolSetting EnableLuminancePicker;
     BoolSetting ShowBakeDataVisualizer;
+    BoolSetting ViewIndirectDiffuse;
     BoolSetting ViewIndirectSpecular;
+    FloatSetting RoughnessOverride;
     Button SaveLightSettings;
     Button LoadLightSettings;
     Button SaveEXRScreenshot;
@@ -282,6 +312,9 @@ namespace AppSettings
 
         SunAreaLightApproximation.Initialize(tweakBar, "SunAreaLightApproximation", "Sun Light", "Sun Area Light Approximation", "Controls whether the sun is treated as a disc area light in the real-time shader", true);
         Settings.AddSetting(&SunAreaLightApproximation);
+
+        BakeDirectSunLight.Initialize(tweakBar, "BakeDirectSunLight", "Sun Light", "Bake Direct Sun Light", "Bakes the direct contribution from the sun light into the light map", false);
+        Settings.AddSetting(&BakeDirectSunLight);
 
         SunTintColor.Initialize(tweakBar, "SunTintColor", "Sun Light", "Sun Tint Color", "The color of the sun", Float3(1.0000f, 1.0000f, 1.0000f), false, -340282300000000000000000000000000000000.0000f, 340282300000000000000000000000000000000.0000f, 0.0100f, ColorUnit::None);
         Settings.AddSetting(&SunTintColor);
@@ -471,8 +504,14 @@ namespace AppSettings
         SGDiffuseMode.Initialize(tweakBar, "SGDiffuseMode", "SG Settings", "SG Diffuse Mode", "", SGDiffuseModes::Fitted, 3, SGDiffuseModesLabels);
         Settings.AddSetting(&SGDiffuseMode);
 
-        UseASGWarp.Initialize(tweakBar, "UseASGWarp", "SG Settings", "Use ASG Warp", "", true);
-        Settings.AddSetting(&UseASGWarp);
+        SGSpecularMode.Initialize(tweakBar, "SGSpecularMode", "SG Settings", "Use ASG Warp", "", SGSpecularModes::ASGWarp, 3, SGSpecularModesLabels);
+        Settings.AddSetting(&SGSpecularMode);
+
+        SH4DiffuseMode.Initialize(tweakBar, "SH4DiffuseMode", "SH Settings", "L1 SH Diffuse Mode", "", SH4DiffuseModes::Convolution, 2, SH4DiffuseModesLabels);
+        Settings.AddSetting(&SH4DiffuseMode);
+
+        SHSpecularMode.Initialize(tweakBar, "SHSpecularMode", "SH Settings", "SH Specular Mode", "", SHSpecularModes::Convolution, 4, SHSpecularModesLabels);
+        Settings.AddSetting(&SHSpecularMode);
 
         LightMapResolution.Initialize(tweakBar, "LightMapResolution", "Baking", "Light Map Resolution", "The texture resolution of the light map", 256, 64, 4096);
         Settings.AddSetting(&LightMapResolution);
@@ -492,11 +531,14 @@ namespace AppSettings
         BakeRussianRouletteProbability.Initialize(tweakBar, "BakeRussianRouletteProbability", "Baking", "Russian Roullette Probability", "Maximum probability for continuing when Russian roulette is used", 0.5000f, 0.0000f, 1.0000f, 0.0100f, ConversionMode::None, 1.0000f);
         Settings.AddSetting(&BakeRussianRouletteProbability);
 
-        BakeMode.Initialize(tweakBar, "BakeMode", "Baking", "Bake Mode", "", BakeModes::SG9, 10, BakeModesLabels);
+        BakeMode.Initialize(tweakBar, "BakeMode", "Baking", "Bake Mode", "The current encoding/basis used for baking light map sample points", BakeModes::SG5, 12, BakeModesLabels);
         Settings.AddSetting(&BakeMode);
 
-        SolveMode.Initialize(tweakBar, "SolveMode", "Baking", "Solve Mode", "", SolveModes::RunningAverageNN, 5, SolveModesLabels);
+        SolveMode.Initialize(tweakBar, "SolveMode", "Baking", "Solve Mode", "Controls how path tracer radiance samples are converted into a set of per-texel SG lobes", SolveModes::RunningAverageNN, 5, SolveModesLabels);
         Settings.AddSetting(&SolveMode);
+
+        WorldSpaceBake.Initialize(tweakBar, "WorldSpaceBake", "Baking", "World Space Bake", "If true, the sample points are baked in a world-space orientation instead of tangent space (SH and SG bake modes only)", false);
+        Settings.AddSetting(&WorldSpaceBake);
 
         CurrentScene.Initialize(tweakBar, "CurrentScene", "Scene", "Current Scene", "", Scenes::Box, 3, ScenesLabels);
         Settings.AddSetting(&CurrentScene);
@@ -534,6 +576,9 @@ namespace AppSettings
         RoughnessScale.Initialize(tweakBar, "RoughnessScale", "Scene", "Specular Roughness Scale", "Global scale applied to all material roughness values", 2.0000f, 0.0100f, 340282300000000000000000000000000000000.0000f, 0.0100f, ConversionMode::None, 1.0000f);
         Settings.AddSetting(&RoughnessScale);
 
+        MetallicOffset.Initialize(tweakBar, "MetallicOffset", "Scene", "Metallic Offset", "", 0.0000f, -1.0000f, 1.0000f, 0.0100f, ConversionMode::None, 1.0000f);
+        Settings.AddSetting(&MetallicOffset);
+
         ShowGroundTruth.Initialize(tweakBar, "ShowGroundTruth", "Ground Truth", "Show Ground Truth", "If enabled, shows a ground truth image rendered on the CPU", false);
         Settings.AddSetting(&ShowGroundTruth);
 
@@ -570,8 +615,14 @@ namespace AppSettings
         ShowBakeDataVisualizer.Initialize(tweakBar, "ShowBakeDataVisualizer", "Debug", "Show Bake Data Visualizer", "", false);
         Settings.AddSetting(&ShowBakeDataVisualizer);
 
+        ViewIndirectDiffuse.Initialize(tweakBar, "ViewIndirectDiffuse", "Debug", "View Indirect Diffuse", "", false);
+        Settings.AddSetting(&ViewIndirectDiffuse);
+
         ViewIndirectSpecular.Initialize(tweakBar, "ViewIndirectSpecular", "Debug", "View Indirect Specular", "", false);
         Settings.AddSetting(&ViewIndirectSpecular);
+
+        RoughnessOverride.Initialize(tweakBar, "RoughnessOverride", "Debug", "Roughness Override", "", 0.0000f, 0.0000f, 1.0000f, 0.0100f, ConversionMode::None, 1.0000f);
+        Settings.AddSetting(&RoughnessOverride);
 
         SaveLightSettings.Initialize(tweakBar, "SaveLightSettings", "Debug", "Save Light Settings", "Saves the lighting settings to a file");
         Settings.AddSetting(&SaveLightSettings);
@@ -599,6 +650,8 @@ namespace AppSettings
 
         TwHelper::SetOpened(tweakBar, "SG Settings", false);
 
+        TwHelper::SetOpened(tweakBar, "SH Settings", false);
+
         TwHelper::SetOpened(tweakBar, "Baking", false);
 
         TwHelper::SetOpened(tweakBar, "Scene", false);
@@ -625,6 +678,7 @@ namespace AppSettings
     {
         CBuffer.Data.EnableSun = EnableSun;
         CBuffer.Data.SunAreaLightApproximation = SunAreaLightApproximation;
+        CBuffer.Data.BakeDirectSunLight = BakeDirectSunLight;
         CBuffer.Data.SunTintColor = SunTintColor;
         CBuffer.Data.SunIntensityScale = SunIntensityScale;
         CBuffer.Data.SunSize = SunSize;
@@ -666,10 +720,13 @@ namespace AppSettings
         CBuffer.Data.FilterSize = FilterSize;
         CBuffer.Data.GaussianSigma = GaussianSigma;
         CBuffer.Data.SGDiffuseMode = SGDiffuseMode;
-        CBuffer.Data.UseASGWarp = UseASGWarp;
+        CBuffer.Data.SGSpecularMode = SGSpecularMode;
+        CBuffer.Data.SH4DiffuseMode = SH4DiffuseMode;
+        CBuffer.Data.SHSpecularMode = SHSpecularMode;
         CBuffer.Data.LightMapResolution = LightMapResolution;
         CBuffer.Data.BakeMode = BakeMode;
         CBuffer.Data.SolveMode = SolveMode;
+        CBuffer.Data.WorldSpaceBake = WorldSpaceBake;
         CBuffer.Data.EnableDiffuse = EnableDiffuse;
         CBuffer.Data.EnableSpecular = EnableSpecular;
         CBuffer.Data.EnableDirectLighting = EnableDirectLighting;
@@ -681,10 +738,13 @@ namespace AppSettings
         CBuffer.Data.NormalMapIntensity = NormalMapIntensity;
         CBuffer.Data.DiffuseAlbedoScale = DiffuseAlbedoScale;
         CBuffer.Data.RoughnessScale = RoughnessScale;
+        CBuffer.Data.MetallicOffset = MetallicOffset;
         CBuffer.Data.BloomExposure = BloomExposure;
         CBuffer.Data.BloomMagnitude = BloomMagnitude;
         CBuffer.Data.BloomBlurSigma = BloomBlurSigma;
+        CBuffer.Data.ViewIndirectDiffuse = ViewIndirectDiffuse;
         CBuffer.Data.ViewIndirectSpecular = ViewIndirectSpecular;
+        CBuffer.Data.RoughnessOverride = RoughnessOverride;
 
         CBuffer.ApplyChanges(context);
         CBuffer.SetVS(context, 7);
@@ -701,6 +761,7 @@ namespace AppSettings
 #include <Graphics\\Spectrum.h>
 #include <Graphics\\Sampling.h>
 #include <SF11_Math.h>
+#include <HosekSky\\ArHosekSkyModel.h>
 
 namespace AppSettings
 {
@@ -915,6 +976,9 @@ namespace AppSettings
 
         SGDiffuseMode.SetEditable(useSGSettings);
         SolveMode.SetEditable(useSGSettings);
+
+        SH4DiffuseMode.SetEditable(BakeMode == BakeModes::SH4);
+        SHSpecularMode.SetEditable(BakeMode == BakeModes::SH4 || BakeMode == BakeModes::SH9);
 
         if(AppSettings::HasSunDirChanged())
         {

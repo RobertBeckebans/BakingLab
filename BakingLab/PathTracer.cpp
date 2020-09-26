@@ -138,7 +138,7 @@ static Float3 SampleSphericalAreaLight(const Float3& position, const Float3& nor
     {
         sampleDir /= sampleDirLen;
 
-        visible = Occluded(scene, position, sampleDir, 0.1f, sampleDirLen) == false;
+        visible = (AppSettings::EnableAreaLightShadows == false) || (Occluded(scene, position, sampleDir, 0.1f, sampleDirLen) == false);
     }
 
     float areaNDotL = std::abs(Float3::Dot(sampleDir, Float3::Normalize(samplePos - lightPos)));
@@ -190,7 +190,7 @@ static float AreaLightIntersection(const Float3& rayStart, const Float3& rayDir,
 
 // Computes the difuse and specular contribution from the sun, given a 2D random sample point
 // representing a location on the surface of the light
-static Float3 SampleSunLight(const Float3& position, const Float3& normal, RTCScene scene,
+Float3 SampleSunLight(const Float3& position, const Float3& normal, RTCScene scene,
                              const Float3& diffuseAlbedo, const Float3& cameraPos,
                              bool includeSpecular, Float3 specAlbedo, float roughness,
                              float u1, float u2, Float3& irradiance)
@@ -263,6 +263,12 @@ Float3 PathTrace(const PathTracerParams& params, Random& randomGenerator, float&
     const int64 maxPathLength = params.MaxPathLength;
     for(int64 pathLength = 1; pathLength <= maxPathLength || maxPathLength == -1; ++pathLength)
     {
+        const bool indirectSpecOnly = params.ViewIndirectSpecular && pathLength == 1;
+        const bool indirectDiffuseOnly = params.ViewIndirectDiffuse && pathLength == 1;
+        const bool enableSpecular = (params.EnableBounceSpecular || (pathLength == 1)) && params.EnableSpecular;
+        const bool enableDiffuse = params.EnableDiffuse;
+        const bool skipDirect = AppSettings::ShowGroundTruth && (!AppSettings::EnableDirectLighting || indirectDiffuseOnly) && (pathLength == 1);
+
         // See if we should randomly terminate this path using Russian Roullete
         const int32 rouletteDepth = params.RussianRouletteDepth;
         if(pathLength >= rouletteDepth && rouletteDepth != -1)
@@ -321,7 +327,7 @@ Float3 PathTrace(const PathTracerParams& params, Random& randomGenerator, float&
             const uint64 materialIdx = bvh.MaterialIndices[ray.primID];
 
             Float3 albedo = 1.0f;
-            if(AppSettings::EnableAlbedoMaps)
+            if(AppSettings::EnableAlbedoMaps && !indirectDiffuseOnly)
                 albedo = SampleTexture2D(hitSurface.TexCoord, bvh.MaterialDiffuseMaps[materialIdx]);
 
             Float3x3 tangentToWorld;
@@ -345,15 +351,16 @@ Float3 PathTrace(const PathTracerParams& params, Random& randomGenerator, float&
 
             float sqrtRoughness = Float3(SampleTexture2D(hitSurface.TexCoord, bvh.MaterialRoughnessMaps[materialIdx])).x;
             float metallic =  Float3(SampleTexture2D(hitSurface.TexCoord, bvh.MaterialMetallicMaps[materialIdx])).x;
+            metallic = Saturate(metallic + AppSettings::MetallicOffset);
 
             Float3 diffuseAlbedo = Lerp(albedo, Float3(0.0f), metallic) * AppSettings::DiffuseAlbedoScale;
             Float3 specAlbedo = Lerp(Float3(0.03f), albedo, metallic);
             sqrtRoughness *= AppSettings::RoughnessScale;
-            float roughness = sqrtRoughness * sqrtRoughness;
+            if(AppSettings::RoughnessOverride >= 0.01f)
+                sqrtRoughness = AppSettings::RoughnessOverride;
 
-            const bool indirectSpecOnly = params.ViewIndirectSpecular && pathLength == 1;
-            const bool enableSpecular = (params.EnableBounceSpecular || pathLength == 1) && params.EnableSpecular;
-            const bool enableDiffuse = params.EnableDiffuse ? true : false;
+            sqrtRoughness = Saturate(sqrtRoughness);
+            float roughness = sqrtRoughness * sqrtRoughness;
 
             diffuseAlbedo *= enableDiffuse ? 1.0f : 0.0f;
 
@@ -367,9 +374,11 @@ Float3 PathTrace(const PathTracerParams& params, Random& randomGenerator, float&
                     Float2 sunSample = params.SampleSet->Sun();
                     if(pathLength > 1)
                         sunSample = randomGenerator.RandomFloat2();
-                    directLighting += SampleSunLight(hitSurface.Position, normal, bvh.Scene, diffuseAlbedo,
+                    Float3 sunDirectLighting = SampleSunLight(hitSurface.Position, normal, bvh.Scene, diffuseAlbedo,
                                                      rayOrigin, enableSpecular, specAlbedo, roughness,
                                                      sunSample.x, sunSample.y, directIrradiance);
+                    if(!skipDirect || AppSettings::BakeDirectSunLight)
+                        directLighting += sunDirectLighting;
                 }
 
                 // Compute direct lighting from the area light
@@ -379,9 +388,11 @@ Float3 PathTrace(const PathTracerParams& params, Random& randomGenerator, float&
                     if(pathLength > 1)
                         areaLightSample = randomGenerator.RandomFloat2();
                     Float3 areaLightSampleDir;
-                    directLighting += SampleAreaLight(hitSurface.Position, normal, bvh.Scene, diffuseAlbedo,
-                                                      rayOrigin, enableSpecular, specAlbedo, roughness,
-                                                      areaLightSample.x, areaLightSample.y, directIrradiance, areaLightSampleDir);
+                    Float3 areaLightDirectLighting = SampleAreaLight(hitSurface.Position, normal, bvh.Scene, diffuseAlbedo,
+                                                     rayOrigin, enableSpecular, specAlbedo, roughness,
+                                                     areaLightSample.x, areaLightSample.y, directIrradiance, areaLightSampleDir);
+                    if(!skipDirect || AppSettings::BakeDirectAreaLight)
+                        directLighting += areaLightDirectLighting;
                 }
 
                 radiance += directLighting * throughput;
@@ -392,7 +403,7 @@ Float3 PathTrace(const PathTracerParams& params, Random& randomGenerator, float&
             if(AppSettings::EnableIndirectLighting || params.ViewIndirectSpecular)
             {
                 const bool enableDiffuseSampling = metallic < 1.0f && AppSettings::EnableIndirectDiffuse && enableDiffuse && indirectSpecOnly == false;
-                const bool enableSpecularSampling = enableSpecular && AppSettings::EnableIndirectSpecular;
+                const bool enableSpecularSampling = enableSpecular && AppSettings::EnableIndirectSpecular && !indirectDiffuseOnly;
                 if(enableDiffuseSampling || enableSpecularSampling)
                 {
                     // Randomly select if we should sample our diffuse BRDF, or our specular BRDF
@@ -439,7 +450,7 @@ Float3 PathTrace(const PathTracerParams& params, Random& randomGenerator, float&
                         // Compute both BRDF's
                         Float3 brdf = 0.0f;
                         if(enableDiffuseSampling)
-                            brdf += diffuseAlbedo * InvPi;
+                            brdf += ((AppSettings::ShowGroundTruth && params.ViewIndirectDiffuse && pathLength == 1) ? Float3(1, 1, 1) : diffuseAlbedo) * InvPi;
 
                         if(enableSpecularSampling)
                         {

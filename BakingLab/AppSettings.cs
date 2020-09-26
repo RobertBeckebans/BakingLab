@@ -258,6 +258,12 @@ enum BakeModes
 {
     Diffuse = 0,
 
+    [EnumLabel("Directional")]
+    Directional,
+
+    [EnumLabel("DirectionalRGB")]
+    DirectionalRGB,
+
     [EnumLabel("Half-Life 2")]
     HL2,
 
@@ -306,6 +312,31 @@ enum SGDiffuseModes
     Fitted,
 }
 
+enum SGSpecularModes
+{
+    Punctual = 0,
+
+    [EnumLabel("SG Warp")]
+    SGWarp,
+
+    [EnumLabel("ASG Warp")]
+    ASGWarp,
+}
+
+enum SH4DiffuseModes
+{
+    Convolution = 0,
+    Geomerics,
+}
+
+enum SHSpecularModes
+{
+    Convolution = 0,
+    DominantDirection,
+    Punctual,
+    Prefiltered,
+}
+
 public class Settings
 {
     const float BaseSunSize = 0.27f;
@@ -317,6 +348,9 @@ public class Settings
 
         [HelpText("Controls whether the sun is treated as a disc area light in the real-time shader")]
         bool SunAreaLightApproximation = true;
+
+        [HelpText("Bakes the direct contribution from the sun light into the light map")]
+        bool BakeDirectSunLight = false;
 
         [HelpText("The color of the sun")]
         Color SunTintColor = new Color(1.0f, 1.0f, 1.0f, 1.0f);
@@ -619,7 +653,18 @@ public class Settings
         SGDiffuseModes SGDiffuseMode = SGDiffuseModes.Fitted;
 
         [DisplayName("Use ASG Warp")]
-        bool UseASGWarp = true;
+        SGSpecularModes SGSpecularMode = SGSpecularModes.ASGWarp;
+    }
+
+    [ExpandGroup(false)]
+    [DisplayName("SH Settings")]
+    public class SHSettings
+    {
+        [DisplayName("L1 SH Diffuse Mode")]
+        SH4DiffuseModes SH4DiffuseMode = SH4DiffuseModes.Convolution;
+
+        [DisplayName("SH Specular Mode")]
+        SHSpecularModes SHSpecularMode = SHSpecularModes.Convolution;
     }
 
     [ExpandGroup(false)]
@@ -661,9 +706,14 @@ public class Settings
         [DisplayName("Russian Roullette Probability")]
         float BakeRussianRouletteProbability = 0.5f;
 
-        BakeModes BakeMode = BakeModes.SG9;
+        [HelpText("The current encoding/basis used for baking light map sample points")]
+        BakeModes BakeMode = BakeModes.SG5;
 
-        SolveModes SolveMode = SolveModes.NNLS;
+        [HelpText("Controls how path tracer radiance samples are converted into a set of per-texel SG lobes")]
+        SolveModes SolveMode = SolveModes.RunningAverageNN;
+
+        [HelpText("If true, the sample points are baked in a world-space orientation instead of tangent space (SH and SG bake modes only)")]
+        bool WorldSpaceBake = false;
     }
 
     [ExpandGroup(false)]
@@ -722,6 +772,10 @@ public class Settings
         [StepSize(0.01f)]
         [HelpText("Global scale applied to all material roughness values")]
         float RoughnessScale = 2.0f;
+
+        [MinValue(-1.0f)]
+        [MaxValue(1.0f)]
+        float MetallicOffset = 0.0f;
     }
 
     [ExpandGroup(false)]
@@ -803,7 +857,12 @@ public class Settings
         [UseAsShaderConstant(false)]
         bool ShowBakeDataVisualizer = false;
 
+        bool ViewIndirectDiffuse = false;
         bool ViewIndirectSpecular = false;
+
+        [MinValue(0.0f)]
+        [MaxValue(1.0f)]
+        float RoughnessOverride = 0.0f;
 
         [DisplayName("Save Light Settings")]
         [HelpText("Saves the lighting settings to a file")]

@@ -2,6 +2,7 @@ cbuffer AppSettings : register(b7)
 {
     bool EnableSun;
     bool SunAreaLightApproximation;
+    bool BakeDirectSunLight;
     float3 SunTintColor;
     float SunIntensityScale;
     float SunSize;
@@ -43,10 +44,13 @@ cbuffer AppSettings : register(b7)
     float FilterSize;
     float GaussianSigma;
     int SGDiffuseMode;
-    bool UseASGWarp;
+    int SGSpecularMode;
+    int SH4DiffuseMode;
+    int SHSpecularMode;
     int LightMapResolution;
     int BakeMode;
     int SolveMode;
+    bool WorldSpaceBake;
     bool EnableDiffuse;
     bool EnableSpecular;
     bool EnableDirectLighting;
@@ -58,10 +62,13 @@ cbuffer AppSettings : register(b7)
     float NormalMapIntensity;
     float DiffuseAlbedoScale;
     float RoughnessScale;
+    float MetallicOffset;
     float BloomExposure;
     float BloomMagnitude;
     float BloomBlurSigma;
+    bool ViewIndirectDiffuse;
     bool ViewIndirectSpecular;
+    float RoughnessOverride;
 }
 
 static const int SunDirectionTypes_UnitVector = 0;
@@ -155,6 +162,18 @@ static const int SGDiffuseModes_InnerProduct = 0;
 static const int SGDiffuseModes_Punctual = 1;
 static const int SGDiffuseModes_Fitted = 2;
 
+static const int SGSpecularModes_Punctual = 0;
+static const int SGSpecularModes_SGWarp = 1;
+static const int SGSpecularModes_ASGWarp = 2;
+
+static const int SH4DiffuseModes_Convolution = 0;
+static const int SH4DiffuseModes_Geomerics = 1;
+
+static const int SHSpecularModes_Convolution = 0;
+static const int SHSpecularModes_DominantDirection = 1;
+static const int SHSpecularModes_Punctual = 2;
+static const int SHSpecularModes_Prefiltered = 3;
+
 static const int SampleModes_Random = 0;
 static const int SampleModes_Stratified = 1;
 static const int SampleModes_Hammersley = 2;
@@ -162,15 +181,17 @@ static const int SampleModes_UniformGrid = 3;
 static const int SampleModes_CMJ = 4;
 
 static const int BakeModes_Diffuse = 0;
-static const int BakeModes_HL2 = 1;
-static const int BakeModes_SH4 = 2;
-static const int BakeModes_SH9 = 3;
-static const int BakeModes_H4 = 4;
-static const int BakeModes_H6 = 5;
-static const int BakeModes_SG5 = 6;
-static const int BakeModes_SG6 = 7;
-static const int BakeModes_SG9 = 8;
-static const int BakeModes_SG12 = 9;
+static const int BakeModes_Directional = 1;
+static const int BakeModes_DirectionalRGB = 2;
+static const int BakeModes_HL2 = 3;
+static const int BakeModes_SH4 = 4;
+static const int BakeModes_SH9 = 5;
+static const int BakeModes_H4 = 6;
+static const int BakeModes_H6 = 7;
+static const int BakeModes_SG5 = 8;
+static const int BakeModes_SG6 = 9;
+static const int BakeModes_SG9 = 10;
+static const int BakeModes_SG12 = 11;
 
 static const int SolveModes_Projection = 0;
 static const int SolveModes_SVD = 1;

@@ -181,6 +181,39 @@ enum class SGDiffuseModes
 
 typedef EnumSettingT<SGDiffuseModes> SGDiffuseModesSetting;
 
+enum class SGSpecularModes
+{
+    Punctual = 0,
+    SGWarp = 1,
+    ASGWarp = 2,
+
+    NumValues
+};
+
+typedef EnumSettingT<SGSpecularModes> SGSpecularModesSetting;
+
+enum class SH4DiffuseModes
+{
+    Convolution = 0,
+    Geomerics = 1,
+
+    NumValues
+};
+
+typedef EnumSettingT<SH4DiffuseModes> SH4DiffuseModesSetting;
+
+enum class SHSpecularModes
+{
+    Convolution = 0,
+    DominantDirection = 1,
+    Punctual = 2,
+    Prefiltered = 3,
+
+    NumValues
+};
+
+typedef EnumSettingT<SHSpecularModes> SHSpecularModesSetting;
+
 enum class SampleModes
 {
     Random = 0,
@@ -197,15 +230,17 @@ typedef EnumSettingT<SampleModes> SampleModesSetting;
 enum class BakeModes
 {
     Diffuse = 0,
-    HL2 = 1,
-    SH4 = 2,
-    SH9 = 3,
-    H4 = 4,
-    H6 = 5,
-    SG5 = 6,
-    SG6 = 7,
-    SG9 = 8,
-    SG12 = 9,
+    Directional = 1,
+    DirectionalRGB = 2,
+    HL2 = 3,
+    SH4 = 4,
+    SH9 = 5,
+    H4 = 6,
+    H6 = 7,
+    SG5 = 8,
+    SG6 = 9,
+    SG9 = 10,
+    SG12 = 11,
 
     NumValues
 };
@@ -244,6 +279,7 @@ namespace AppSettings
 
     extern BoolSetting EnableSun;
     extern BoolSetting SunAreaLightApproximation;
+    extern BoolSetting BakeDirectSunLight;
     extern ColorSetting SunTintColor;
     extern FloatSetting SunIntensityScale;
     extern FloatSetting SunSize;
@@ -302,7 +338,9 @@ namespace AppSettings
     extern JitterModesSetting JitterMode;
     extern FloatSetting JitterScale;
     extern SGDiffuseModesSetting SGDiffuseMode;
-    extern BoolSetting UseASGWarp;
+    extern SGSpecularModesSetting SGSpecularMode;
+    extern SH4DiffuseModesSetting SH4DiffuseMode;
+    extern SHSpecularModesSetting SHSpecularMode;
     extern IntSetting LightMapResolution;
     extern IntSetting NumBakeSamples;
     extern SampleModesSetting BakeSampleMode;
@@ -311,6 +349,7 @@ namespace AppSettings
     extern FloatSetting BakeRussianRouletteProbability;
     extern BakeModesSetting BakeMode;
     extern SolveModesSetting SolveMode;
+    extern BoolSetting WorldSpaceBake;
     extern ScenesSetting CurrentScene;
     extern BoolSetting EnableDiffuse;
     extern BoolSetting EnableSpecular;
@@ -323,6 +362,7 @@ namespace AppSettings
     extern FloatSetting NormalMapIntensity;
     extern FloatSetting DiffuseAlbedoScale;
     extern FloatSetting RoughnessScale;
+    extern FloatSetting MetallicOffset;
     extern BoolSetting ShowGroundTruth;
     extern IntSetting NumRenderSamples;
     extern SampleModesSetting RenderSampleMode;
@@ -335,7 +375,9 @@ namespace AppSettings
     extern FloatSetting BloomBlurSigma;
     extern BoolSetting EnableLuminancePicker;
     extern BoolSetting ShowBakeDataVisualizer;
+    extern BoolSetting ViewIndirectDiffuse;
     extern BoolSetting ViewIndirectSpecular;
+    extern FloatSetting RoughnessOverride;
     extern Button SaveLightSettings;
     extern Button LoadLightSettings;
     extern Button SaveEXRScreenshot;
@@ -345,6 +387,7 @@ namespace AppSettings
     {
         bool32 EnableSun;
         bool32 SunAreaLightApproximation;
+        bool32 BakeDirectSunLight;
         Float4Align Float3 SunTintColor;
         float SunIntensityScale;
         float SunSize;
@@ -386,10 +429,13 @@ namespace AppSettings
         float FilterSize;
         float GaussianSigma;
         int32 SGDiffuseMode;
-        bool32 UseASGWarp;
+        int32 SGSpecularMode;
+        int32 SH4DiffuseMode;
+        int32 SHSpecularMode;
         int32 LightMapResolution;
         int32 BakeMode;
         int32 SolveMode;
+        bool32 WorldSpaceBake;
         bool32 EnableDiffuse;
         bool32 EnableSpecular;
         bool32 EnableDirectLighting;
@@ -401,10 +447,13 @@ namespace AppSettings
         float NormalMapIntensity;
         float DiffuseAlbedoScale;
         float RoughnessScale;
+        float MetallicOffset;
         float BloomExposure;
         float BloomMagnitude;
         float BloomBlurSigma;
+        bool32 ViewIndirectDiffuse;
         bool32 ViewIndirectSpecular;
+        float RoughnessOverride;
     };
 
     extern ConstantBuffer<AppSettingsCBuffer> CBuffer;
@@ -550,7 +599,7 @@ namespace AppSettings
     inline uint64 BasisCount(uint64 bakeMode)
     {
         Assert_(bakeMode < uint64(BakeModes::NumValues));
-        static const uint64 BasisCounts[] = { 1, 3, 4, 9, 4, 6, 5, 6, 9, 12 };
+        static const uint64 BasisCounts[] = { 1, 2, 4, 3, 4, 9, 4, 6, 5, 6, 9, 12 };
         StaticAssert_(ArraySize_(BasisCounts) == uint64(BakeModes::NumValues));
         Assert_(BasisCounts[bakeMode] <= MaxBasisCount);
         return BasisCounts[bakeMode];
@@ -582,7 +631,7 @@ namespace AppSettings
 
     inline bool SupportsProgressiveIntegration(BakeModes bakeMode, SolveModes solveMode)
     {
-        if(SGCount(bakeMode) > 0 && (solveMode == SolveModes::SVD || solveMode == SolveModes::NNLS))
+        if((bakeMode == BakeModes::Directional) || (bakeMode == BakeModes::DirectionalRGB) || (SGCount(bakeMode) > 0 && (solveMode == SolveModes::SVD || solveMode == SolveModes::NNLS)))
             return false;
         else
             return true;
